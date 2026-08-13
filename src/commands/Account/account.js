@@ -3,11 +3,16 @@ import {
     PermissionFlagsBits,
     MessageFlags,
 } from 'discord.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 import { createEmbed } from '../../utils/embeds.js';
 
 const DB_KEY = 'account_giver:stock';
 const PANEL_KEY = 'account_giver:panel';
+
+// The accounts.txt file is in the bot's root folder
+const ACCOUNTS_FILE = path.join(process.cwd(), 'accounts.txt');
 
 async function getAccounts(db) {
     const accounts = await db.get(DB_KEY, []);
@@ -77,7 +82,6 @@ export default {
         .setDescription('Manage the Account Giver')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 
-        // /account add
         .addSubcommand(subcommand =>
             subcommand
                 .setName('add')
@@ -90,27 +94,18 @@ export default {
                 )
         )
 
-        // /account import
         .addSubcommand(subcommand =>
             subcommand
                 .setName('import')
-                .setDescription('Import a complete account file')
-                .addAttachmentOption(option =>
-                    option
-                        .setName('file')
-                        .setDescription('TXT file containing username:password per line')
-                        .setRequired(true)
-                )
+                .setDescription('Import all accounts from accounts.txt')
         )
 
-        // /account stock
         .addSubcommand(subcommand =>
             subcommand
                 .setName('stock')
                 .setDescription('Check the current account stock')
         )
 
-        // /account panel
         .addSubcommand(subcommand =>
             subcommand
                 .setName('panel')
@@ -130,7 +125,7 @@ export default {
         const subcommand = interaction.options.getSubcommand();
 
         // =========================
-        // ADD ACCOUNT
+        // ADD ONE ACCOUNT
         // =========================
 
         if (subcommand === 'add') {
@@ -165,92 +160,78 @@ export default {
         }
 
         // =========================
-        // IMPORT TXT FILE
+        // IMPORT ACCOUNTS.TXT
         // =========================
 
         if (subcommand === 'import') {
-            const file = interaction.options.getAttachment('file');
-
-            if (!file) {
-                return interaction.reply({
-                    content: '❌ No file was provided.',
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            // Check the actual filename instead of MIME type.
-            // Discord may not always report .txt as text/plain.
-            const fileName = file.name?.toLowerCase() || '';
-
-            if (!fileName.endsWith('.txt')) {
-                return interaction.reply({
-                    content: '❌ The file must be a `.txt` file.',
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
             await interaction.deferReply({
                 flags: MessageFlags.Ephemeral,
             });
 
             try {
-                // Download the attachment
-                const response = await fetch(file.url);
-
-                if (!response.ok) {
-                    throw new Error(
-                        `Failed to download file: HTTP ${response.status}`
+                // Check if accounts.txt exists
+                try {
+                    await fs.access(ACCOUNTS_FILE);
+                } catch {
+                    return interaction.editReply(
+                        '❌ `accounts.txt` was not found in the bot root folder.'
                     );
                 }
 
-                const text = await response.text();
+                // Read the entire file
+                const text = await fs.readFile(
+                    ACCOUNTS_FILE,
+                    'utf8'
+                );
 
-                // Read every line
+                // Convert file into accounts
                 const importedAccounts = text
                     .split(/\r?\n/)
                     .map(line => line.trim())
                     .filter(line => {
-                        // Ignore empty lines
                         if (!line) return false;
 
-                        // Must contain username:password
+                        // Expected:
+                        // username:password
                         return line.includes(':');
                     });
 
                 if (importedAccounts.length === 0) {
                     return interaction.editReply(
-                        '❌ No valid accounts were found in the file.\n\n' +
-                        'Each line must use this format:\n' +
+                        '❌ No valid accounts were found in `accounts.txt`.\n\n' +
+                        'Expected format:\n' +
                         '`username:password`'
                     );
                 }
 
                 const accounts = await getAccounts(db);
 
-                // Add the entire file to the stock
+                // Add all accounts
                 accounts.push(...importedAccounts);
 
+                // Save them
                 await db.set(DB_KEY, accounts);
 
-                // Refresh the Account Giver panel
+                // Update panel
                 await updateAccountPanel(
                     interaction.client,
                     db
                 );
 
                 return interaction.editReply(
-                    `✅ **${importedAccounts.length}** accounts imported successfully!\n` +
+                    `✅ Successfully imported **${importedAccounts.length} accounts**!\n` +
                     `📦 Total stock: **${accounts.length}**`
                 );
 
             } catch (error) {
                 console.error(
-                    'Account import error:',
+                    'Account file import error:',
                     error
                 );
 
                 return interaction.editReply(
-                    '❌ Failed to read the TXT file.'
+                    '❌ Failed to read `accounts.txt`.\n\n' +
+                    `Error: \`${error.message}\``
                 );
             }
         }
@@ -313,7 +294,7 @@ export default {
                 fetchReply: true,
             });
 
-            // Remember which message is the Account Giver panel
+            // Save panel location
             await db.set(PANEL_KEY, {
                 channelId: message.channel.id,
                 messageId: message.id,
