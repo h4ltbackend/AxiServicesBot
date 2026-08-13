@@ -16,31 +16,47 @@ async function getAccounts(db) {
 export default {
     data: new SlashCommandBuilder()
         .setName('account')
-        .setDescription('Gestion du Account Giver')
+        .setDescription('Manage the Account Giver')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 
+        // /account add
         .addSubcommand(subcommand =>
             subcommand
                 .setName('add')
-                .setDescription('Ajouter un compte au stock')
+                .setDescription('Add a single account to the stock')
                 .addStringOption(option =>
                     option
                         .setName('account')
-                        .setDescription('Compte au format email:motdepasse')
+                        .setDescription('Account in username:password format')
                         .setRequired(true)
                 )
         )
 
+        // /account import
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('import')
+                .setDescription('Import a complete account file')
+                .addAttachmentOption(option =>
+                    option
+                        .setName('file')
+                        .setDescription('TXT file containing username:password per line')
+                        .setRequired(true)
+                )
+        )
+
+        // /account stock
         .addSubcommand(subcommand =>
             subcommand
                 .setName('stock')
-                .setDescription('Voir le nombre de comptes disponibles')
+                .setDescription('Check the current account stock')
         )
 
+        // /account panel
         .addSubcommand(subcommand =>
             subcommand
                 .setName('panel')
-                .setDescription('Envoyer le panneau Account Giver')
+                .setDescription('Create the Account Giver panel')
         ),
 
     async execute(interaction) {
@@ -48,7 +64,7 @@ export default {
 
         if (!db) {
             return interaction.reply({
-                content: '❌ La base de données n’est pas disponible.',
+                content: '❌ Database unavailable.',
                 flags: MessageFlags.Ephemeral,
             });
         }
@@ -56,14 +72,88 @@ export default {
         const subcommand = interaction.options.getSubcommand();
 
         // =========================
-        // /account add
+        // IMPORT FILE
+        // =========================
+        if (subcommand === 'import') {
+            const file = interaction.options.getAttachment('file');
+
+            if (!file) {
+                return interaction.reply({
+                    content: '❌ No file was provided.',
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            if (
+                file.contentType &&
+                !file.contentType.includes('text/plain')
+            ) {
+                return interaction.reply({
+                    content: '❌ The file must be a .txt file.',
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+
+            await interaction.deferReply({
+                flags: MessageFlags.Ephemeral,
+            });
+
+            try {
+                const response = await fetch(file.url);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const text = await response.text();
+
+                const importedAccounts = text
+                    .split(/\r?\n/)
+                    .map(line => line.trim())
+                    .filter(line => {
+                        if (!line) return false;
+
+                        // Expected format: username:password
+                        return line.includes(':');
+                    });
+
+                if (importedAccounts.length === 0) {
+                    return interaction.editReply(
+                        '❌ No valid accounts were found in the file.\n\nExpected format: `username:password`'
+                    );
+                }
+
+                const accounts = await getAccounts(db);
+
+                accounts.push(...importedAccounts);
+
+                await db.set(DB_KEY, accounts);
+
+                return interaction.editReply(
+                    `✅ **${importedAccounts.length}** accounts imported successfully!\n📦 Total stock: **${accounts.length}**`
+                );
+
+            } catch (error) {
+                console.error('Account import error:', error);
+
+                return interaction.editReply(
+                    '❌ Failed to read the file.'
+                );
+            }
+        }
+
+        // =========================
+        // ADD ONE ACCOUNT
         // =========================
         if (subcommand === 'add') {
-            const account = interaction.options.getString('account', true).trim();
+            const account = interaction.options
+                .getString('account', true)
+                .trim();
 
             if (!account.includes(':')) {
                 return interaction.reply({
-                    content: '❌ Utilise le format `esmail:motdepasse`.',
+                    content:
+                        '❌ Invalid format. Use `username:password`.',
                     flags: MessageFlags.Ephemeral,
                 });
             }
@@ -75,25 +165,27 @@ export default {
             await db.set(DB_KEY, accounts);
 
             return interaction.reply({
-                content: `✅ Added Account to stock\n📦 Current stock : **${accounts.length}**`,
+                content:
+                    `✅ Account added successfully!\n📦 Current stock: **${accounts.length}**`,
                 flags: MessageFlags.Ephemeral,
             });
         }
 
         // =========================
-        // /account stock
+        // STOCK
         // =========================
         if (subcommand === 'stock') {
             const accounts = await getAccounts(db);
 
             return interaction.reply({
-                content: `📦 Theres currently **${accounts.length} compte(s)**.`,
+                content:
+                    `📦 Current stock: **${accounts.length} accounts**`,
                 flags: MessageFlags.Ephemeral,
             });
         }
 
         // =========================
-        // /account panel
+        // PANEL
         // =========================
         if (subcommand === 'panel') {
             const accounts = await getAccounts(db);
@@ -101,12 +193,12 @@ export default {
             const embed = createEmbed({
                 title: '🎁 Account Giver',
                 description:
-                    'After pressing you will recieve a dm from the bot.',
+                    'Click the button below to receive a random account in your DMs.',
                 color: 'primary',
                 fields: [
                     {
                         name: '📦 Available Stock',
-                        value: `**${accounts.length}** compte(s)`,
+                        value: `**${accounts.length}** account(s)`,
                         inline: false,
                     },
                 ],
